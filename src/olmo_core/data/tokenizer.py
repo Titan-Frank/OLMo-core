@@ -34,6 +34,11 @@ class TokenizerName(StrEnum):
     The base GPT2 tokenizer.
     """
 
+    qwen3_5 = "Qwen/Qwen3.5-9B"
+    """
+    The shared Qwen3.5 tokenizer, using the official Qwen3.5 tokenizer config.
+    """
+
 
 @dataclass
 class TokenizerConfig(Config):
@@ -121,6 +126,18 @@ class TokenizerConfig(Config):
             bos_token_id=50256,
             pad_token_id=50256,
             identifier=TokenizerName.gpt2,
+        )
+
+    @classmethod
+    def qwen3_5(cls) -> "TokenizerConfig":
+        """
+        Get a :data:`~TokenizerName.qwen3_5` tokenizer config.
+        """
+        return cls(
+            vocab_size=248320,
+            eos_token_id=248044,
+            pad_token_id=248044,
+            identifier=TokenizerName.qwen3_5,
         )
 
     @classmethod
