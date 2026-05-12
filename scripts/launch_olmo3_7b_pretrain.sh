@@ -1,20 +1,19 @@
 #!/usr/bin/env bash
-# Distributed launcher for OLMo3-7B pretraining on raw jsonl.zst files with on-the-fly tokenization.
+# Distributed launcher for OLMo3-7B pretraining on tokenized Dolma3 NPY shards.
 #
-# Usage:
-#   bash scripts/launch_olmo3_7b_pretrain_jsonl.sh
+# Typical platform launch:
+#   bash scripts/launch_olmo3_7b_pretrain.sh
 #
 # Useful overrides:
-#   SAVE_FOLDER=/path/to/checkpoints bash scripts/launch_olmo3_7b_pretrain_jsonl.sh
-#   MAX_TOKENS=10000000000 HARD_STOP_STEPS=1000 bash scripts/launch_olmo3_7b_pretrain_jsonl.sh
-#   DRY_RUN=1 bash scripts/launch_olmo3_7b_pretrain_jsonl.sh
+#   SAVE_FOLDER=/path/to/checkpoints bash scripts/launch_olmo3_7b_pretrain.sh
+#   MAX_TOKENS=10000000000 HARD_STOP_STEPS=1000 bash scripts/launch_olmo3_7b_pretrain.sh
+#   DRY_RUN=1 bash scripts/launch_olmo3_7b_pretrain.sh
 
 set -euo pipefail
 
 REPO_ROOT="/inspire/qb-ilm/project/ai4education/public/wwb/OLMo-core"
-# Point to raw jsonl.zst files instead of tokenized .npy files
-DATA_ROOT="${DATA_ROOT:-/inspire/qb-ilm/project/ai4education/public/wwb/datasets/dolma3/pretrain/dolma3_mix-6T-1025-7B/data}"
-RUN_NAME="${RUN_NAME:-olmo3-7b-pretrain-dolma3-jsonl}"
+DATA_ROOT="${DATA_ROOT:-/inspire/qb-ilm/project/ai4education/public/wwb/datasets/dolma3/pretrain/tokenized}"
+RUN_NAME="${RUN_NAME:-olmo3-7b-pretrain-dolma3}"
 
 JOB_ID="${TRAIN_JOB_ID:-${SLURM_JOB_ID:-manual}}"
 SAVE_FOLDER="${SAVE_FOLDER:-/inspire/qb-ilm/project/ai4education/public/wwb/checkpoints/${RUN_NAME}/${JOB_ID}}"
@@ -64,7 +63,7 @@ cd "${REPO_ROOT}"
 mkdir -p "${SAVE_FOLDER}" "${WORK_DIR}"
 
 echo "============================================================"
-echo "OLMo3-7B Dolma3 pretraining (on-the-fly tokenization)"
+echo "OLMo3-7B Dolma3 pretraining"
 echo "host=$(hostname)"
 echo "run_name=${RUN_NAME}"
 echo "data_root=${DATA_ROOT}"
@@ -75,8 +74,6 @@ echo "rank=${RANK} world_size=${WORLD_SIZE} local_rank=${LOCAL_RANK} local_world
 echo "num_nodes=${NUM_NODES} node_rank=${NODE_RANK}"
 echo "============================================================"
 
-TOKENIZER_PATH="${TOKENIZER_PATH:-allenai/dolma2-tokenizer}"
-
 COMMON_ARGS=(
     --name "${RUN_NAME}"
     --data-root "${DATA_ROOT}"
@@ -85,12 +82,24 @@ COMMON_ARGS=(
     --sequence-length "${SEQUENCE_LENGTH}"
     --max-tokens "${MAX_TOKENS}"
     --hard-stop-steps "${HARD_STOP_STEPS}"
-    --rank-microbatch-size "${RANK_MICROBATCH_SIZE}"
-    --tokenizer "${TOKENIZER_PATH}"
+    data_loader.global_batch_size="${GLOBAL_BATCH_SIZE}"
+    data_loader.num_workers="${NUM_WORKERS}"
+    train_module.rank_microbatch_size="${RANK_MICROBATCH_SIZE}"
 )
 
 if [[ "${ENABLE_WANDB:-0}" == "1" ]]; then
     COMMON_ARGS+=(--enable-wandb --wandb-project "${WANDB_PROJECT:-olmo3-7b-pretrain}")
+fi
+
+if [[ "${ENABLE_LM_EVAL:-0}" == "1" ]]; then
+    COMMON_ARGS+=(--enable-lm-eval)
+    if [[ -n "${EVAL_DATA_ROOT:-}" ]]; then
+        COMMON_ARGS+=(--eval-data-root "${EVAL_DATA_ROOT}")
+    fi
+fi
+
+if [[ "${ENABLE_DOWNSTREAM_EVAL:-0}" == "1" ]]; then
+    COMMON_ARGS+=(--enable-downstream-eval)
 fi
 
 if [[ "${DRY_RUN:-0}" == "1" ]]; then
@@ -100,7 +109,7 @@ fi
 EXTRA_ARGS=("$@")
 
 if [[ "${LAUNCH_MODE:-auto}" == "direct" || ( "${LAUNCH_MODE:-auto}" == "auto" && -n "${TORCHELASTIC_RUN_ID:-}" ) ]]; then
-    exec python scripts/train_olmo3_7b_pretrain_jsonl.py "${COMMON_ARGS[@]}" "${EXTRA_ARGS[@]}"
+    exec python scripts/train_olmo3_7b_pretrain.py "${COMMON_ARGS[@]}" "${EXTRA_ARGS[@]}"
 fi
 
 exec torchrun \
@@ -109,6 +118,6 @@ exec torchrun \
     --nproc-per-node="${LOCAL_WORLD_SIZE}" \
     --master-addr="${MASTER_ADDR}" \
     --master-port="${MASTER_PORT}" \
-    scripts/train_olmo3_7b_pretrain_jsonl.py \
+    scripts/train_olmo3_7b_pretrain.py \
     "${COMMON_ARGS[@]}" \
     "${EXTRA_ARGS[@]}"

@@ -17,6 +17,7 @@ tmp/
 .venv/
 .vscode/
 .cursor/
+.sii/
 /*.iml
 pyrightconfig.json
 .ruff.toml

@@ -228,6 +228,7 @@ def _get_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-tokens", type=int, default=int(5e12), help="Max tokens")
     parser.add_argument("--hard-stop-steps", type=int, default=597046, help="Hard stop steps")
     parser.add_argument("--tokenizer", type=str, default="allenai/dolma2-tokenizer", help="Tokenizer name or local path")
+    parser.add_argument("--rank-microbatch-size", type=int, default=2 * 8192, help="Rank microbatch size in tokens")
     parser.add_argument("--dry-run", action="store_true", help="Print config and exit")
     parser.add_argument("--train-single", action="store_true", help="Single rank mode")
     parser.add_argument("--enable-wandb", action="store_true", help="Enable W&B")
@@ -265,7 +266,7 @@ def build_config(opts: argparse.Namespace, overrides: List[str]):
     )
 
     train_module_config = TransformerTrainModuleConfig(
-        rank_microbatch_size=2 * 8192,
+        rank_microbatch_size=opts.rank_microbatch_size,
         max_sequence_length=sequence_length,
         optim=SkipStepAdamWConfig(
             lr=LR, weight_decay=0.1, betas=(0.9, 0.95),
