@@ -58,6 +58,8 @@ fi
 export OLMO_SHARED_FS="${OLMO_SHARED_FS:-1}"
 export OMP_NUM_THREADS="${OMP_NUM_THREADS:-8}"
 export CUDA_DEVICE_MAX_CONNECTIONS="${CUDA_DEVICE_MAX_CONNECTIONS:-1}"
+# Gloo barrier timeout: tokenization can take hours, default 900s is too short
+export GLOO_SOCKET_TIMEOUT_MS="${GLOO_SOCKET_TIMEOUT_MS:-86400000}"
 export PYTHONPATH="${REPO_ROOT}/src:${PYTHONPATH:-}"
 
 cd "${REPO_ROOT}"

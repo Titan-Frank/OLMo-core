@@ -141,8 +141,10 @@ class LazyTokenizedDataset(NumpyFSLDataset):
     A NumpyFSLDataset that lazily tokenizes jsonl.zst files.
     Tokenized files are cached as .npy in cache_dir.
 
-    Inherits from NumpyFSLDataset for full compatibility with
-    NumpyFSLDataLoader: distributed sharding, state dict, resume, etc.
+    IMPORTANT: super().__init__() is deferred to prepare() to avoid
+    creating placeholder files that cause 128 processes to race on
+    the shared filesystem and mislead the parent class about dataset
+    size. Before prepare() is called, only basic attributes are available.
     """
 
     def __init__(
@@ -159,6 +161,11 @@ class LazyTokenizedDataset(NumpyFSLDataset):
         self.jsonl_paths = jsonl_paths
         self.cache_dir = cache_dir
         self.tokenizer_name = tokenizer_name
+        self._sequence_length = sequence_length
+        self._eos_token_id = eos_token_id
+        self._pad_token_id = pad_token_id
+        self._vocab_size = vocab_size
+        self._bos_token_id = bos_token_id
 
         cache_dir.mkdir(parents=True, exist_ok=True)
 
@@ -168,50 +175,74 @@ class LazyTokenizedDataset(NumpyFSLDataset):
             npy_path = _npy_cache_path(jsonl_path, cache_dir)
             self._npy_paths.append(npy_path)
 
-        # Create placeholder .npy files so the parent class can compute
-        # offsets via get_file_size(). These will be overwritten by prepare()
-        # with real tokenized data.
-        for npy_path in self._npy_paths:
-            if not npy_path.exists():
-                np.save(npy_path, np.array([0], dtype=np.uint32))
-
-        # Pass npy paths to parent.
-        super().__init__(
-            *[str(p) for p in self._npy_paths],
-            sequence_length=sequence_length,
-            pad_token_id=pad_token_id,
-            eos_token_id=eos_token_id,
-            vocab_size=vocab_size,
-            dtype=np.uint32,
-            bos_token_id=bos_token_id,
-        )
+        # Set _array_paths so the parent's `paths` property works before prepare().
+        # super().__init__() will overwrite this in prepare().
+        self._array_paths = tuple(str(p) for p in self._npy_paths)
+        self._initialized = False
 
     def prepare(self):
-        """Tokenize missing files (rank 0 only), then rebuild offsets."""
-        from olmo_core.distributed.utils import get_fs_local_rank
+        """Tokenize missing files (one rank per node in parallel), then init parent."""
+        import torch.distributed as dist
+        from olmo_core.distributed.utils import get_fs_local_rank, get_world_size, get_rank
 
         fs_local_rank = get_fs_local_rank()
-        is_rank0 = fs_local_rank == 0
 
-        # Rank 0 tokenizes missing files
-        if is_rank0:
-            for jsonl_path, npy_path in zip(self.jsonl_paths, self._npy_paths):
-                if npy_path.exists():
-                    print(f"  [Cache hit] {npy_path.name}")
-                    continue
-                tokenize_shard_to_npy(
-                    jsonl_path, npy_path, self.tokenizer_name, self.eos_token_id,
-                )
+        if dist.is_initialized():
+            rank = get_rank()
+            world_size = get_world_size()
+            local_world_size = int(os.environ.get("LOCAL_WORLD_SIZE", 8))
+            node_rank = rank // local_world_size
+            num_nodes = world_size // local_world_size
+        else:
+            rank = 0
+            world_size = 1
+            node_rank = 0
+            num_nodes = 1
 
-        # Wait for rank 0 to finish tokenization
-        if torch.distributed.is_initialized():
-            torch.distributed.barrier()
+        # Only local rank 0 on each node does tokenization (avoids tokenizer contention)
+        if fs_local_rank == 0:
+            my_files = [
+                (jsonl_path, npy_path)
+                for jsonl_path, npy_path in zip(self.jsonl_paths, self._npy_paths)
+                if not (npy_path.exists() and npy_path.stat().st_size > 132)
+            ]
 
-        # Force parent to rebuild offsets from the now-existing .npy files
-        self._array_offsets = None
-        self._array_file_sizes = None
-        self._num_instances = None
-        len(self)
+            # Distribute files across nodes (not across all ranks)
+            my_files = my_files[node_rank::num_nodes]
+
+            if my_files:
+                num_workers = min(len(my_files), max(1, (os.cpu_count() or 8) - 8))
+                print(f"  Node {node_rank} (rank {rank}): tokenizing {len(my_files)} files with {num_workers} workers...")
+                if num_workers > 1:
+                    import multiprocessing as mp
+                    with mp.Pool(processes=num_workers) as pool:
+                        pool.starmap(
+                            tokenize_shard_to_npy,
+                            [(p, n, self.tokenizer_name, self.eos_token_id) for p, n in my_files],
+                        )
+                else:
+                    for jsonl_path, npy_path in my_files:
+                        tokenize_shard_to_npy(
+                            jsonl_path, npy_path, self.tokenizer_name, self.eos_token_id,
+                        )
+                print(f"  Node {node_rank}: {len(my_files)} files done")
+
+        # Wait for all nodes to finish tokenization.
+        if dist.is_initialized():
+            dist.barrier()
+
+        # NOW initialize the parent class with real tokenized data
+        NumpyFSLDataset.__init__(
+            self,
+            *self.paths,
+            sequence_length=self._sequence_length,
+            pad_token_id=self._pad_token_id,
+            eos_token_id=self._eos_token_id,
+            vocab_size=self._vocab_size,
+            dtype=np.uint32,
+            bos_token_id=self._bos_token_id,
+        )
+        self._initialized = True
 
 
 def _get_parser() -> argparse.ArgumentParser:
@@ -311,6 +342,23 @@ def main(opts: argparse.Namespace) -> None:
     from olmo_core.script_utils import prepare_cli_environment, prepare_training_environment
     from olmo_core.utils import seed_all
 
+    try:
+        _main_inner(opts)
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        # Force flush so torchrun captures the traceback
+        sys.stdout.flush()
+        sys.stderr.flush()
+        raise
+
+
+def _main_inner(opts: argparse.Namespace) -> None:
+    from olmo_core.data import NumpyDataLoaderConfig
+    from olmo_core.io import is_url
+    from olmo_core.script_utils import prepare_cli_environment, prepare_training_environment
+    from olmo_core.utils import seed_all
+
     if opts.dry_run:
         prepare_cli_environment()
 
@@ -355,7 +403,8 @@ def main(opts: argparse.Namespace) -> None:
     data_loader_config = NumpyDataLoaderConfig(
         global_batch_size=int(os.environ.get("GLOBAL_BATCH_SIZE", GLOBAL_BATCH_SIZE)),
         seed=34521,
-        num_workers=8,
+        num_workers=int(os.environ.get("NUM_WORKERS", "8")),
+        work_dir=Path(opts.work_dir),
     )
     data_loader = data_loader_config.build(
         dataset,

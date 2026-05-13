@@ -1464,7 +1464,7 @@ class Trainer:
         log.info("Dry-run complete")
 
     def _fit_epoch(self):
-        self.data_loader.reshuffle(self.epoch)
+        self.data_loader.reshuffle(self.epoch, in_memory=True)
 
         log.info(f"Starting epoch {self.epoch}...")
 
