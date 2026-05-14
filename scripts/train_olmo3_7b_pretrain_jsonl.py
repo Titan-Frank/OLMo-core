@@ -69,9 +69,11 @@ def get_tokenizer_config(tokenizer_path: str) -> TokenizerConfig:
     )
 
 
-def find_jsonl_zst_files(data_root: str) -> List[Path]:
-    """Recursively find all jsonl.zst files under data_root."""
-    return sorted(Path(data_root).rglob("*.jsonl.zst"))
+def find_jsonl_files(data_root: str) -> List[Path]:
+    """Recursively find all jsonl.zst and jsonl.gz files under data_root."""
+    root = Path(data_root)
+    files = list(root.rglob("*.jsonl.zst")) + list(root.rglob("*.jsonl.gz"))
+    return sorted(files)
 
 
 def _npy_cache_path(jsonl_path: Path, cache_dir: Path) -> Path:
@@ -96,9 +98,10 @@ def tokenize_shard_to_npy(
     eos_token_id: int,
 ) -> int:
     """
-    Tokenize a single jsonl.zst file and save to .npy.
+    Tokenize a single jsonl.zst or jsonl.gz file and save to .npy.
     Returns the total number of tokens.
     """
+    import gzip
     import zstandard
 
     from transformers import AutoTokenizer
@@ -109,9 +112,12 @@ def tokenize_shard_to_npy(
 
     print(f"Tokenizing {jsonl_path.name}...")
     with open(jsonl_path, "rb") as f:
-        dctx = zstandard.ZstdDecompressor()
-        stream = dctx.stream_reader(f)
-        text_stream = io.TextIOWrapper(stream, encoding="utf-8")
+        if jsonl_path.suffix == ".gz":
+            text_stream = io.TextIOWrapper(gzip.open(f), encoding="utf-8")
+        else:
+            dctx = zstandard.ZstdDecompressor()
+            stream = dctx.stream_reader(f)
+            text_stream = io.TextIOWrapper(stream, encoding="utf-8")
 
         for line in text_stream:
             line = line.strip()
@@ -288,7 +294,7 @@ def build_config(opts: argparse.Namespace, overrides: List[str]):
     work_dir = Path(opts.work_dir)
 
     # Find all jsonl.zst files
-    jsonl_files = find_jsonl_zst_files(opts.data_root)
+    jsonl_files = find_jsonl_files(opts.data_root)
     print(f"Found {len(jsonl_files)} jsonl.zst files")
 
     # Model config

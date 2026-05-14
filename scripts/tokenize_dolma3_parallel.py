@@ -65,6 +65,7 @@ def tokenize_shard_to_npy(
     tokenizer_name: str,
     eos_token_id: int,
 ) -> int:
+    import gzip
     import zstandard
     from transformers import AutoTokenizer
 
@@ -74,9 +75,12 @@ def tokenize_shard_to_npy(
     total_docs = 0
 
     with open(jsonl_path, "rb") as f:
-        dctx = zstandard.ZstdDecompressor()
-        stream = dctx.stream_reader(f)
-        text_stream = io.TextIOWrapper(stream, encoding="utf-8")
+        if jsonl_path.suffix == ".gz":
+            text_stream = io.TextIOWrapper(gzip.open(f), encoding="utf-8")
+        else:
+            dctx = zstandard.ZstdDecompressor()
+            stream = dctx.stream_reader(f)
+            text_stream = io.TextIOWrapper(stream, encoding="utf-8")
 
         for line in text_stream:
             line = line.strip()
@@ -146,9 +150,9 @@ def main():
     cache_dir.mkdir(parents=True, exist_ok=True)
 
     # Find all source files
-    jsonl_files = sorted(data_root.rglob("*.jsonl.zst"))
+    jsonl_files = sorted(list(data_root.rglob("*.jsonl.zst")) + list(data_root.rglob("*.jsonl.gz")))
     total_files = len(jsonl_files)
-    print(f"Found {total_files} jsonl.zst files under {data_root}")
+    print(f"Found {total_files} jsonl files under {data_root}")
 
     # Build mapping and check which are done
     file_pairs = []
