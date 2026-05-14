@@ -58,6 +58,17 @@ def _npy_is_valid(path: Path) -> bool:
         return False
 
 
+def _cleanup_stale_tmp(cache_dir: Path, max_age_s: int = 600):
+    """Remove .tmp.npy files older than max_age_s seconds."""
+    now = time.time()
+    for tmp in cache_dir.glob("*.tmp.npy"):
+        try:
+            if now - tmp.stat().st_mtime > max_age_s:
+                tmp.unlink()
+        except OSError:
+            pass
+
+
 def tokenize_shard_to_npy(
     jsonl_path: Path,
     npy_path: Path,
@@ -276,24 +287,15 @@ def main():
               f"ETA {eta_s/3600:.1f}h"
               f"{f' ({batch_errors} errors)' if batch_errors else ''}")
 
-        # Clean up stale tmp files
-        for tmp in cache_dir.glob("*.tmp.npy"):
-            try:
-                tmp.unlink()
-            except OSError:
-                pass
+        # Clean up stale tmp files older than 10 minutes (avoid deleting other nodes' active writes)
+        _cleanup_stale_tmp(cache_dir, max_age_s=600)
 
     elapsed = time.time() - start_time
     print(f"\nNode {node_rank} done: {total_done} files, {total_tokens/1e9:.2f}B tokens in {elapsed:.0f}s")
     if total_errors:
         print(f"  {total_errors} files had errors and were skipped")
 
-    # Clean up tmp files one last time
-    for tmp in cache_dir.glob("*.tmp.npy"):
-        try:
-            tmp.unlink()
-        except OSError:
-            pass
+    _cleanup_stale_tmp(cache_dir, max_age_s=600)
 
     # Final progress check — just count npy files (fast)
     valid_all = sum(1 for _ in cache_dir.glob("*.npy"))
