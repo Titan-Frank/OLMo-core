@@ -65,7 +65,14 @@ export PYTHONPATH="${REPO_ROOT}/src:${PYTHONPATH:-}"
 cd "${REPO_ROOT}"
 mkdir -p "${SAVE_FOLDER}" "${WORK_DIR}"
 
-echo "============================================================"
+# Log redirection to shared directory for post-mortem debugging
+LOG_DIR="${WORK_DIR}/logs"
+mkdir -p "${LOG_DIR}"
+LOG_FILE="${LOG_DIR}/rank_${RANK}_$(hostname).log"
+export PYTHONUNBUFFERED=1
+
+# Redirect stdout and stderr to both terminal and shared log file.
+exec > >(tee -a "${LOG_FILE}") 2>&1
 echo "OLMo3-7B Dolma3 pretraining (on-the-fly tokenization)"
 echo "host=$(hostname)"
 echo "run_name=${RUN_NAME}"

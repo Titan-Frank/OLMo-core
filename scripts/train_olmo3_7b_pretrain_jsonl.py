@@ -13,6 +13,7 @@ By inheriting from NumpyFSLDataset, we get:
 """
 
 import argparse
+import datetime
 import hashlib
 import io
 import json
@@ -131,7 +132,11 @@ def tokenize_shard_to_npy(
             total_docs += 1
 
     arr = np.array(all_token_ids, dtype=np.uint32) if all_token_ids else np.array([], dtype=np.uint32)
-    np.save(npy_path, arr)
+    # Atomic write: write to a process-unique temp file, then rename.
+    # We must ensure np.save writes to the same path we pass to os.replace.
+    tmp_path = npy_path.parent / f"{npy_path.stem}.{os.getpid()}.tmp.npy"
+    np.save(tmp_path, arr)
+    os.replace(tmp_path, npy_path)
     print(f"  {jsonl_path.name}: {total_docs} docs -> {len(arr)} tokens")
     return len(arr)
 
@@ -183,9 +188,9 @@ class LazyTokenizedDataset(NumpyFSLDataset):
     def prepare(self):
         """Tokenize missing files (one rank per node in parallel), then init parent."""
         import torch.distributed as dist
-        from olmo_core.distributed.utils import get_fs_local_rank, get_world_size, get_rank
+        from olmo_core.distributed.utils import get_local_rank, get_world_size, get_rank
 
-        fs_local_rank = get_fs_local_rank()
+        local_rank = get_local_rank()
 
         if dist.is_initialized():
             rank = get_rank()
@@ -199,12 +204,21 @@ class LazyTokenizedDataset(NumpyFSLDataset):
             node_rank = 0
             num_nodes = 1
 
+        def _npy_is_valid(path: Path) -> bool:
+            if not path.exists() or path.stat().st_size <= 132:
+                return False
+            try:
+                np.load(path, mmap_mode="r")
+                return True
+            except Exception:
+                return False
+
         # Only local rank 0 on each node does tokenization (avoids tokenizer contention)
-        if fs_local_rank == 0:
+        if local_rank == 0:
             my_files = [
                 (jsonl_path, npy_path)
                 for jsonl_path, npy_path in zip(self.jsonl_paths, self._npy_paths)
-                if not (npy_path.exists() and npy_path.stat().st_size > 132)
+                if not _npy_is_valid(npy_path)
             ]
 
             # Distribute files across nodes (not across all ranks)
@@ -385,7 +399,11 @@ def _main_inner(opts: argparse.Namespace) -> None:
     else:
         backend = None
 
-    prepare_training_environment(shared_filesystem=not is_url(opts.save_folder), backend=backend)
+    prepare_training_environment(
+        shared_filesystem=not is_url(opts.save_folder),
+        backend=backend,
+        timeout=datetime.timedelta(hours=24),
+    )
     seed_all(12536)
 
     print("Building model...")
