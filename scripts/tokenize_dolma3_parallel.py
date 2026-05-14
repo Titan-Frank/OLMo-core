@@ -51,12 +51,10 @@ def _npy_cache_path(jsonl_path: Path, cache_dir: Path) -> Path:
 
 
 def _npy_is_valid(path: Path) -> bool:
-    if not path.exists() or path.stat().st_size <= 132:
-        return False
+    """Fast check: file exists and is larger than the numpy header (~128 bytes)."""
     try:
-        np.load(path, mmap_mode="r")
-        return True
-    except Exception:
+        return path.exists() and path.stat().st_size > 132
+    except OSError:
         return False
 
 
