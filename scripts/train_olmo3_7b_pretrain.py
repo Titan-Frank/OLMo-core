@@ -52,6 +52,7 @@ from olmo_core.train.callbacks import (
     DownstreamEvaluatorCallbackConfig,
     LMEvaluatorCallbackConfig,
     MonkeyPatcherCallback,
+    TensorBoardCallback,
     WandBCallback,
 )
 from olmo_core.train.train_module import (
@@ -240,6 +241,13 @@ def build_config(opts: argparse.Namespace, overrides: List[str]) -> ExperimentCo
             ),
         )
         .with_callback("config_saver", ConfigSaverCallback())
+        .with_callback(
+            "tensorboard",
+            TensorBoardCallback(
+                enabled=True,
+                log_dir=f"{opts.save_folder}/tensorboard",
+            ),
+        )
         .with_callback(
             "lm_evaluator",
             LMEvaluatorCallbackConfig(

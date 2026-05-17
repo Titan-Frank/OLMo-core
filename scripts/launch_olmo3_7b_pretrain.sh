@@ -12,7 +12,7 @@
 set -euo pipefail
 
 REPO_ROOT="/inspire/qb-ilm/project/ai4education/public/wwb/OLMo-core"
-DATA_ROOT="${DATA_ROOT:-/inspire/qb-ilm/project/ai4education/public/wwb/datasets/dolma3/pretrain/tokenized}"
+DATA_ROOT="${DATA_ROOT:-/inspire/qb-ilm/project/ai4education/public/wwb/datasets/dolma3/pretrain/dolma3_mix-6T-1025-7B/tokenized_cache}"
 RUN_NAME="${RUN_NAME:-olmo3-7b-pretrain-dolma3}"
 
 JOB_ID="${TRAIN_JOB_ID:-${SLURM_JOB_ID:-manual}}"
